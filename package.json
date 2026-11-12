@@ -1,6 +1,6 @@
 {
   "name": "i18n-audit-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Zero-dependency i18n linter: finds hardcoded strings, concatenated sentences and missing plurals, scores your key names, and checks translations. Supports React/Vue/Svelte and Flutter.",
   "bin": { "i18n-audit": "i18n-audit.js" },
   "files": ["i18n-audit.js"],

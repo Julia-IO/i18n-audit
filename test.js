@@ -50,6 +50,13 @@ const baseline = path.join(tmp, 'baseline.json');
 run(path.join(__dirname, 'examples', 'react'), '--write-baseline', baseline, '--json');
 const withBaseline = JSON.parse(run(path.join(__dirname, 'examples', 'react'), '--baseline', baseline, '--json'));
 expect('baseline: no new findings right after writing it', withBaseline.summary.errors + withBaseline.summary.warnings + withBaseline.summary.info === 0);
+
+// HTML report: written to the given file, shows the naming score, never leaks the absolute project path.
+const htmlFile = path.join(tmp, 'report.html');
+run(path.join(__dirname, 'examples', 'flutter'), '--html', htmlFile);
+const html = fs.existsSync(htmlFile) ? fs.readFileSync(htmlFile, 'utf8') : '';
+expect('html: report written with naming score and findings', html.includes('Key naming score') && html.includes('Hand-rolled plural') && html.includes('save2'));
+expect('html: absolute project path not included', html && !html.includes(path.join(__dirname, 'examples')));
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nAll checks passed');

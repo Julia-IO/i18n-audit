@@ -101,8 +101,17 @@ node i18n-audit.js [dir] [options]
   --baseline [file]        Only report findings that are not in the baseline
   --all                    Show every finding, not just the first 15 per rule
   --json                   Machine-readable output
+  --html [file]            Also write a shareable HTML report (default: i18n-audit-report.html)
   --ci                     Exit with code 1 if there are errors
 ```
+
+## HTML report
+
+```
+npx i18n-audit-cli . --html
+```
+
+Writes `i18n-audit-report.html`: a single self-contained file with the key naming score, a breakdown of keys by grade, the weakest keys and why, a per-language translation table, and every finding with its fix hint. It follows the reader's light/dark setting, shows only the project folder name (never your full disk path), and can be attached to a PR, uploaded as a CI artifact or shared as-is.
 
 ## Adopting it on an existing codebase
 

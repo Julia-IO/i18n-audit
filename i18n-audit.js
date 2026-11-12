@@ -28,6 +28,7 @@ const HELP = `Usage: node i18n-audit.js [dir] [options]
                           only new ones count as errors. Omit this flag for a full scan.
   --all                   Show every finding, not just the first ${15} per rule
   --json                  Machine-readable output
+  --html [file]           Also write a shareable HTML report (default: i18n-audit-report.html)
   --ci                    Exit with code 1 if any errors are found (only new ones, with --baseline)
 
 Ignore comments (in code; JSON/ARB files cannot hold comments, so use a baseline for those):
@@ -53,6 +54,7 @@ for (let i = 0; i < argv.length; i++) {
     const file = argv[i + 1] && argv[i + 1].endsWith('.json') ? path.resolve(argv[++i]) : true;
     opt[a === '--baseline' ? 'baseline' : 'writeBaseline'] = file;
   }
+  else if (a === '--html') opt.html = argv[i + 1] && /\.html?$/i.test(argv[i + 1]) ? path.resolve(argv[++i]) : path.resolve('i18n-audit-report.html');
   else if (a === '-h' || a === '--help') { console.log(HELP); process.exit(0); }
   else opt.root = a;
 }
@@ -563,7 +565,7 @@ for (const [key, e] of Object.entries(S)) {
     const issues = nameIssues(base, v, e.flat);
     const score = Math.max(0, 100 - issues.reduce((t, [, p]) => t + p, 0));
     scores.push(score);
-    if (issues.length) add('naming', e.where, `${String(score).padStart(3)}  ${base} → ${quote(v)}  (${issues.map(i => i[0]).join('; ')})`, { score });
+    if (issues.length) add('naming', e.where, `${String(score).padStart(3)}  ${base} → ${quote(v)}  (${issues.map(i => i[0]).join('; ')})`, { score, key: base, text: v, reasons: issues.map(i => i[0]) });
     const word = v.trim().replace(/[.!?:…]+$/, '').toLowerCase();
     if (AMBIGUOUS.has(word) && !e.desc && issues.length) add('ambiguous', e.where, `${base} → ${quote(v)}`);
     if (words(v) <= 3 && !isVariant) {
@@ -681,10 +683,130 @@ if (opt.baseline) {
   };
 }
 
+// Fix hints for a rule, in Flutter syntax when the findings come from .dart/.arb (or easy_localization) files.
+function hintsFor(rule, list) {
+  const hint = RULES[rule][2];
+  const isDart = f => /\.(dart|arb)\b/.test(f.where) || (!arbCount && detected.includes('easy_localization'));
+  const dartHints = !arbCount && detected.includes('easy_localization') ? EASY_HINTS : DART_HINTS;
+  if (!dartHints[rule] || !list.some(isDart)) return [hint];
+  return list.every(isDart) ? [dartHints[rule]] : [hint, `Flutter: ${dartHints[rule]}`];
+}
+
 const active = findings.filter(f => !f.baseline);
 const count = sev => active.filter(f => f.severity === sev).length;
 const summary = { errors: count('error'), warnings: count('warn'), info: count('info'), suppressedByComments: suppressed,
   ...(baselineInfo ? { existingInBaseline: baselineInfo.existing, fixedSinceBaseline: baselineInfo.fixed } : {}) };
+
+// ---------- HTML report ----------
+function htmlReport() {
+  const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  const sevLabel = { error: 'Error', warn: 'Warning', info: 'Info' };
+  const project = path.basename(ROOT);
+  const date = new Date().toISOString().slice(0, 10);
+  const gradeCls = s => s >= 75 ? 'good' : s >= 60 ? 'ok' : 'bad';
+  const out = [];
+
+  // Naming: score, grade distribution, weakest keys.
+  let naming = '';
+  if (namingScore !== null) {
+    const bands = [['A', 90, 100], ['B', 75, 89], ['C', 60, 74], ['D', 40, 59], ['F', 0, 39]];
+    const counts = bands.map(([, lo, hi]) => scores.filter(s => s >= lo && s <= hi).length);
+    const max = Math.max(1, ...counts);
+    const dist = bands.map(([g, lo, hi], i) => `<div class="dist-row"><span class="dist-label">${g} <small>${lo}–${hi}</small></span>` +
+      `<span class="dist-track"><span class="dist-bar g${g}" style="width:${(counts[i] / max) * 100}%"></span></span><span class="dist-n">${counts[i]}</span></div>`).join('');
+    const weak = active.filter(f => f.rule === 'naming').sort((a, b) => a.score - b.score);
+    const rows = weak.slice(0, 15).map(f => `<tr><td><code>${esc(f.key)}</code></td><td>${esc(clip(f.text, 50))}</td>` +
+      `<td class="num"><span class="mini-track"><span class="mini-bar ${gradeCls(f.score)}" style="width:${f.score}%"></span></span>${f.score}</td>` +
+      `<td>${f.reasons.map(r => `<span class="tag">${esc(r)}</span>`).join(' ')}</td></tr>`).join('');
+    naming = `<section><h2>Key naming</h2><p class="lede">A key is the string's permanent ID. Translators often see only the key and the text,
+      so a key like <code>checkout.payButton</code> tells them what a word is for; <code>save2</code> does not.</p>
+      <div class="naming-grid"><div class="card"><h3>Keys by score</h3>${dist}</div>
+      ${rows ? `<div class="card"><h3>Weakest keys${weak.length > 15 ? ` <small>(15 of ${weak.length})</small>` : ''}</h3>
+      <table><thead><tr><th>Key</th><th>Text</th><th>Score</th><th>Why</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}</div></section>`;
+  }
+
+  // Translations: one row per target locale.
+  let localeTable = '';
+  if (targets.length) {
+    const forLoc = (loc, rule) => active.filter(f => f.rule === rule && (f.where === loc || f.where.endsWith(` [${loc}]`)));
+    const keyCount = list => list.reduce((n, f) => n + (f.keys ? f.keys.length : 1), 0);
+    const cell = (n, sev) => n ? `<td class="num"><span class="pill ${sev}">${n}</span></td>` : '<td class="num ok-cell">✓</td>';
+    const rows = targets.map(loc => `<tr><td><code>${esc(loc)}</code></td>` + cell(keyCount(forLoc(loc, 'missing-translation')), 'error') +
+      cell(forLoc(loc, 'placeholder-mismatch').length, 'error') + cell(forLoc(loc, 'plural-forms').length, 'error') +
+      cell(keyCount(forLoc(loc, 'untranslated')), 'info') + '</tr>').join('');
+    localeTable = `<section><h2>Translations by language</h2><div class="card scroll"><table><thead><tr><th>Locale</th><th class="num">Missing</th>
+      <th class="num">Placeholder mismatch</th><th class="num">Missing plural forms</th><th class="num">Same as source</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  }
+
+  // All findings, grouped like the terminal output.
+  const groups = SECTIONS.map(([title, rules]) => {
+    const blocks = rules.map(rule => {
+      let list = active.filter(f => f.rule === rule);
+      if (!list.length) return '';
+      if (rule === 'naming') list = list.sort((x, y) => x.score - y.score);
+      const [sev, name] = RULES[rule];
+      const items = list.map(f => `<li><span class="where">${esc(f.where)}</span> <span class="detail">${esc(f.detail.trim())}</span></li>`).join('');
+      return `<details class="rule ${sev}"${list.length <= 20 ? ' open' : ''}><summary><span class="pill ${sev}">${sevLabel[sev]}</span> ${esc(name)} <span class="count">${list.length}</span></summary>
+        <ul>${items}</ul>${hintsFor(rule, list).map(h => `<p class="hint">→ ${esc(h)}</p>`).join('')}</details>`;
+    }).join('');
+    return blocks ? `<section><h2>${esc(title.charAt(0) + title.slice(1).toLowerCase())}</h2>${blocks}</section>` : '';
+  }).join('');
+
+  const meta = [`${codeFiles.length} code file${codeFiles.length === 1 ? '' : 's'}`, `${localeFileCount} locale file${localeFileCount === 1 ? '' : 's'}`,
+    srcLoc ? `source <code>${esc(srcLoc)}</code>` : '', targets.length ? `${targets.length} target language${targets.length === 1 ? '' : 's'}` : '',
+    ...detected.map(esc)].filter(Boolean).join(' · ');
+  const extra = [suppressed ? `${suppressed} ignored by i18n-ignore comments` : '', baselineInfo ? `${baselineInfo.existing} known issues hidden by the baseline` +
+    (baselineInfo.fixed ? `, ${baselineInfo.fixed} fixed since` : '') : ''].filter(Boolean).join(' · ');
+
+  out.push(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>i18n audit · ${esc(project)}</title><style>
+:root{--bg:#f7f7f5;--card:#fff;--text:#1d1d1b;--muted:#6b6b66;--line:#e4e3de;--error:#c4362d;--warn:#b7791f;--info:#2b6cb0;--good:#2f855a;--ok:#b7791f;--bad:#c4362d;--code:#f0efea}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--text:#ecebe6;--muted:#9a9993;--line:#33332f;--error:#f2766b;--warn:#e7b04f;--info:#6aa9ec;--good:#5fc48b;--ok:#e7b04f;--bad:#f2766b;--code:#2a2a27}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:1040px;margin:0 auto;padding:40px 24px 64px}header{margin-bottom:28px}.brand{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:30px;margin:4px 0 6px}h2{font-size:20px;margin:40px 0 12px}h3{font-size:14px;margin:0 0 12px;color:var(--muted);font-weight:600}h3 small{font-weight:400}
+.meta{color:var(--muted);font-size:14px}code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:1px 5px;border-radius:4px}
+.tiles{display:grid;grid-template-columns:1.4fr repeat(3,1fr);gap:14px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+.tile .label{font-size:13px;color:var(--muted)}.tile .value{font-size:34px;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums}
+.score .value{font-size:48px}.score .grade{font-size:22px;margin-left:6px}.good{color:var(--good)}.ok{color:var(--ok)}.bad{color:var(--bad)}
+.tile.error .value{color:var(--error)}.tile.warn .value{color:var(--warn)}.tile.info .value{color:var(--info)}.tile .sub{font-size:13px;color:var(--muted)}
+.extra{margin-top:10px;font-size:13px;color:var(--muted)}.lede{color:var(--muted);margin:-4px 0 14px;max-width:70ch}
+.naming-grid{display:grid;grid-template-columns:minmax(220px,1fr) 2.4fr;gap:14px;align-items:start}
+.dist-row{display:flex;align-items:center;gap:10px;margin:7px 0}.dist-label{width:64px;font-weight:600}.dist-label small{font-weight:400;color:var(--muted)}
+.dist-track{flex:1;height:12px;background:var(--code);border-radius:6px;overflow:hidden}.dist-bar{display:block;height:100%;border-radius:6px}
+.gA,.gB{background:var(--good)}.gC{background:var(--ok)}.gD,.gF{background:var(--bad)}.dist-n{width:32px;text-align:right;font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;font-size:14px}th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.mini-track{display:inline-block;width:48px;height:6px;background:var(--code);border-radius:3px;margin-right:8px;vertical-align:middle;overflow:hidden}
+.mini-bar{display:block;height:100%}.mini-bar.good{background:var(--good)}.mini-bar.ok{background:var(--ok)}.mini-bar.bad{background:var(--bad)}
+.tag{display:inline-block;font-size:12px;background:var(--code);border-radius:4px;padding:1px 6px;margin:1px 0;color:var(--muted)}
+.pill{display:inline-block;font-size:12px;font-weight:600;border-radius:999px;padding:1px 9px;color:#fff}.pill.error{background:var(--error)}.pill.warn{background:var(--warn)}.pill.info{background:var(--info)}
+@media (prefers-color-scheme:dark){.pill{color:#161615}}.ok-cell{color:var(--good)}.scroll{overflow-x:auto}
+details.rule{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--line);border-radius:10px;margin:10px 0;padding:0 18px}
+details.rule.error{border-left-color:var(--error)}details.rule.warn{border-left-color:var(--warn)}details.rule.info{border-left-color:var(--info)}
+summary{cursor:pointer;padding:13px 0;font-weight:600}.count{color:var(--muted);font-weight:400;margin-left:4px}
+details ul{list-style:none;margin:0;padding:0 0 4px}details li{padding:5px 0;border-top:1px solid var(--line);font-size:14px;overflow-wrap:anywhere}
+.where{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);margin-right:8px}.detail{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+.hint{color:var(--muted);font-size:14px;margin:6px 0 14px}.clean{color:var(--good);font-weight:600}footer{margin-top:48px;color:var(--muted);font-size:13px}
+@media (max-width:760px){.tiles{grid-template-columns:1fr 1fr}.naming-grid{grid-template-columns:1fr}}
+</style></head><body><main>
+<header><div class="brand">i18n audit</div><h1>${esc(project)}</h1><div class="meta">${meta} · ${date}</div></header>
+<div class="tiles">
+${namingScore !== null ? `<div class="card tile score"><div class="label">Key naming score</div><div class="value ${gradeCls(namingScore)}">${namingScore}<span class="grade">/100 · ${grade(namingScore)}</span></div><div class="sub">${scores.length} keys, ${active.filter(f => f.rule === 'naming').length} with weak names</div></div>` : '<div class="card tile"><div class="label">Key naming score</div><div class="value">–</div><div class="sub">No source strings found</div></div>'}
+<div class="card tile error"><div class="label">Errors</div><div class="value">${summary.errors}</div><div class="sub">Will show up as bugs</div></div>
+<div class="card tile warn"><div class="label">Warnings</div><div class="value">${summary.warnings}</div><div class="sub">Make translation harder</div></div>
+<div class="card tile info"><div class="label">Info</div><div class="value">${summary.info}</div><div class="sub">Worth a look</div></div>
+</div>${extra ? `<div class="extra">${esc(extra)}</div>` : ''}
+${naming}${localeTable}${groups || `<p class="clean">✔ No ${baselineInfo ? 'new ' : ''}findings.</p>`}
+<footer>Generated by <a href="https://github.com/Julia-IO/i18n-audit">i18n-audit</a> · <code>npx i18n-audit-cli</code></footer>
+</main></body></html>`);
+  return out.join('');
+}
+
+if (opt.html) {
+  fs.writeFileSync(opt.html, htmlReport());
+  console.error(`HTML report written: ${path.relative(process.cwd(), opt.html) || opt.html}`);
+}
 
 if (opt.json) {
   console.log(JSON.stringify({ root: ROOT, detected, sourceLocale: srcLoc, targetLocales: targets, codeFiles: codeFiles.length, localeFiles: localeFileCount,
@@ -725,12 +847,7 @@ if (opt.json) {
       console.log(`\n ${icon(sev)} ${bold(name)} ${dim(`(${list.length}${old ? ` new, ${old} in baseline` : ''})`)}`);
       for (const f of opt.all ? list : list.slice(0, LIMIT)) console.log(`    ${dim(f.where)}  ${f.detail}`);
       if (!opt.all && list.length > LIMIT) console.log(dim(`    … ${list.length - LIMIT} more (use --all)`));
-      const isDart = f => /\.(dart|arb)\b/.test(f.where) || (!arbCount && detected.includes('easy_localization'));
-      const dartHints = !arbCount && detected.includes('easy_localization') ? EASY_HINTS : DART_HINTS;
-      if (dartHints[rule] && list.some(isDart)) {
-        if (!list.every(isDart)) console.log(dim(`    → ${hint}`));
-        console.log(dim(`    → ${list.every(isDart) ? '' : 'Flutter: '}${dartHints[rule]}`));
-      } else console.log(dim(`    → ${hint}`));
+      for (const h of hintsFor(rule, list)) console.log(dim(`    → ${h}`));
     }
   }
   if (!active.length) console.log(green(`\n✔ No ${baselineInfo ? 'new ' : ''}findings.`));
