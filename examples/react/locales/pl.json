@@ -1,0 +1,5 @@
+{
+  "checkout": { "title": "Twój koszyk", "payButton": "Zapłać teraz" },
+  "cart": { "summary": "{count, plural, one {Masz # produkt} other {Masz # produktów}}" },
+  "inbox": { "unread_one": "{{count}} nieprzeczytana wiadomość", "unread_other": "{{count}} nieprzeczytanych wiadomości" }
+}

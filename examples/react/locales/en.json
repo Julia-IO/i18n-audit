@@ -1,0 +1,17 @@
+{
+  "checkout": { "title": "Your basket", "payButton": "Pay now" },
+  "cart": {
+    "you": "You have",
+    "items": "items",
+    "summary": "{count, plural, one {You have # item} other {You have # items}}",
+    "remaining": "{count} items left",
+    "files": "{count} file(s) selected"
+  },
+  "save2": "Save",
+  "button": { "close": "Close" },
+  "dialog": { "closeAction": "Close" },
+  "document": { "saveAction": "Save" },
+  "pricing": { "discountCta": "Save" },
+  "activity": { "sharedItem": "{0} shared {1}" },
+  "inbox": { "unread_one": "{{count}} unread message", "unread_other": "{{count}} unread messages" }
+}

@@ -1,0 +1,5 @@
+{
+  "@@locale": "pl",
+  "checkoutTitle": "Twój koszyk",
+  "cartItemCount": "{count, plural, one{1 produkt} other{{count} produktów}}"
+}

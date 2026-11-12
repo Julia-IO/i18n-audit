@@ -1,0 +1,19 @@
+{
+  "@@locale": "en",
+  "checkoutTitle": "Your basket",
+  "@checkoutTitle": { "description": "Title of the checkout screen" },
+  "checkoutPayButton": "Pay now",
+  "youHave": "You have",
+  "items": "items",
+  "save2": "Save",
+  "buttonClose": "Close",
+  "dialogCloseAction": "Close",
+  "pricingDiscountCta": "Save",
+  "@pricingDiscountCta": { "description": "Promo button: pay less, not store a file" },
+  "cartItemCount": "{count, plural, =0{Your basket is empty} =1{1 item} other{{count} items}}",
+  "@cartItemCount": { "placeholders": { "count": { "type": "int" } } },
+  "itemsLeft": "{remaining} items left",
+  "@itemsLeft": { "placeholders": { "remaining": { "type": "int" } } },
+  "activityShared": "{name} shared {item}",
+  "@activityShared": { "placeholders": { "name": {}, "item": { "description": "Name of the shared document", "example": "Q3 report" } } }
+}

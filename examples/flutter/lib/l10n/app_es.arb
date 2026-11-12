@@ -1,0 +1,10 @@
+{
+  "@@locale": "es",
+  "checkoutTitle": "Tu cesta",
+  "checkoutPayButton": "Pagar ahora",
+  "dialogCloseAction": "Cerrar",
+  "pricingDiscountCta": "Ahorra",
+  "cartItemCount": "{count, plural, =1{1 artículo} other{{count} artículos}}",
+  "itemsLeft": "Quedan {cantidad} artículos",
+  "activityShared": "{name} compartió {item}"
+}

@@ -1,0 +1,12 @@
+{
+  "checkout": { "title": "Votre panier", "payButton": "Payer maintenant" },
+  "cart": {
+    "summary": "{count, plural, one {Vous avez # article} other {Vous avez # articles}}",
+    "remaining": "{total} articles restants"
+  },
+  "dialog": { "closeAction": "Close" },
+  "document": { "saveAction": "Enregistrer" },
+  "pricing": { "discountCta": "Économisez" },
+  "inbox": { "unread_one": "{{count}} message non lu", "unread_other": "{{count}} messages non lus" },
+  "legacy": { "oldBanner": "Ancienne bannière" }
+}
