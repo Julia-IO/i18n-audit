@@ -342,8 +342,9 @@ const CONCAT_RES = [
   new RegExp(`\`[^\`\\n]*(?:${PROSE}[^\`\\n]*\\$\\{|\\$\\{[^}]*\\}\\s*${PROSE})[^\`\\n]*\``), // `You have ${n} items`
 ];
 const MANUAL_PLURAL_RES = [
-  /\b\w*(?:count|length|total|num|qty|size)\w*\s*[!=]==?\s*1\s*\?\s*(?:['"`]|t\(|i18n|tr\()/i,
-  /\b\w*(?:count|length|total|num|qty)\w*\s*>\s*1\s*\?\s*(?:['"`]|t\(|i18n|tr\()/i,
+  // Both branches must be text (a string or a translation call): `n > 1 ? "solid" : style` is not a plural.
+  /\b\w*(?:count|length|total|num|qty|size)\w*\s*[!=]==?\s*1\s*\?\s*(?:['"`]|t\(|i18n|tr\(|l10n\.)[^:]*:\s*(?:['"`]|t\(|i18n|tr\(|l10n\.)/i,
+  /\b\w*(?:count|length|total|num|qty)\w*\s*>\s*1\s*\?\s*(?:['"`]|t\(|i18n|tr\(|l10n\.)[^:]*:\s*(?:['"`]|t\(|i18n|tr\(|l10n\.)/i,
   /\?\s*(['"`])s\1\s*:\s*(['"`])\2/,
   /\?\s*(['"`])\1\s*:\s*(['"`])s\2/,
 ];
@@ -909,4 +910,4 @@ if (opt.json) {
   const extra = [suppressed ? `${suppressed} ignored by i18n-ignore comments` : '', baselineInfo ? `${baselineInfo.existing} in baseline` : ''].filter(Boolean).join(', ');
   console.log(`\n${red(`${summary.errors} errors`)}, ${yellow(`${summary.warnings} warnings`)}, ${blue(`${summary.info} info`)}${baselineInfo ? ' (new)' : ''}${extra ? dim(`  ·  ${extra}`) : ''}\n`);
 }
-process.exit(opt.ci && summary.errors ? 1 : 0);
+process.exitCode = opt.ci && summary.errors ? 1 : 0; // not process.exit(): that truncates large output piped to another program
