@@ -746,11 +746,24 @@ function htmlReport() {
       if (rule === 'naming') list = list.sort((x, y) => x.score - y.score);
       const [sev, name] = RULES[rule];
       const items = list.map(f => `<li><span class="where">${esc(f.where)}</span> <span class="detail">${esc(f.detail.trim())}</span></li>`).join('');
-      return `<details class="rule ${sev}"${list.length <= 20 ? ' open' : ''}><summary><span class="pill ${sev}">${sevLabel[sev]}</span> ${esc(name)} <span class="count">${list.length}</span></summary>
+      return `<details class="rule ${sev}" data-rule="${rule}" data-sev="${sev}"${list.length <= 20 ? ' open' : ''}><summary><span class="pill ${sev}">${sevLabel[sev]}</span> ${esc(name)} <span class="count" data-total="${list.length}">${list.length}</span></summary>
         <ul>${items}</ul>${hintsFor(rule, list).map(h => `<p class="hint">→ ${esc(h)}</p>`).join('')}</details>`;
     }).join('');
-    return blocks ? `<section><h2>${esc(title.charAt(0) + title.slice(1).toLowerCase())}</h2>${blocks}</section>` : '';
+    return blocks ? `<section class="fsec"><h3 class="fsec-title">${esc(title.charAt(0) + title.slice(1).toLowerCase())}</h3>${blocks}</section>` : '';
   }).join('');
+
+  // Filter bar: one chip per issue type found, severity toggles and a search box (plain JS, no dependencies).
+  const chips = SECTIONS.flatMap(([, rules]) => rules).map(rule => {
+    const n = active.filter(f => f.rule === rule).length;
+    return n ? `<button type="button" class="chip ${RULES[rule][0]}" data-rule="${rule}" aria-pressed="false">${esc(RULES[rule][1])} <b>${n}</b></button>` : '';
+  }).join('');
+  const sevToggle = sev => summary[{ error: 'errors', warn: 'warnings', info: 'info' }[sev]]
+    ? `<label class="sev ${sev}"><input type="checkbox" data-sev="${sev}" checked> ${{ error: 'Errors', warn: 'Warnings', info: 'Info' }[sev]}</label>` : '';
+  const filterBar = groups ? `<section id="findings"><h2>Findings</h2>
+<div class="filters card"><div class="frow"><input type="search" id="q" placeholder="Filter by file, key, locale or text…" aria-label="Filter findings">
+${['error', 'warn', 'info'].map(sevToggle).join('')}<button type="button" id="reset" class="linkbtn">Reset</button></div>
+<div class="chips">${chips}</div><div class="status" id="status" aria-live="polite"></div></div>
+${groups}<p class="clean" id="nomatch" hidden>No findings match these filters.</p></section>` : '';
 
   const meta = [`${codeFiles.length} code file${codeFiles.length === 1 ? '' : 's'}`, `${localeFileCount} locale file${localeFileCount === 1 ? '' : 's'}`,
     srcLoc ? `source <code>${esc(srcLoc)}</code>` : '', targets.length ? `${targets.length} target language${targets.length === 1 ? '' : 's'}` : '',
@@ -788,18 +801,60 @@ summary{cursor:pointer;padding:13px 0;font-weight:600}.count{color:var(--muted);
 details ul{list-style:none;margin:0;padding:0 0 4px}details li{padding:5px 0;border-top:1px solid var(--line);font-size:14px;overflow-wrap:anywhere}
 .where{font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);margin-right:8px}.detail{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
 .hint{color:var(--muted);font-size:14px;margin:6px 0 14px}.clean{color:var(--good);font-weight:600}footer{margin-top:48px;color:var(--muted);font-size:13px}
+a.tile{color:inherit;text-decoration:none;transition:border-color .15s}a.tile:hover{border-color:var(--muted)}
+.filters{position:sticky;top:0;z-index:5;padding:12px 14px;margin-bottom:14px;box-shadow:0 6px 16px -12px rgba(0,0,0,.35)}
+.frow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}#q{flex:1;min-width:220px;font:inherit;font-size:14px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+.sev{font-size:14px;cursor:pointer;white-space:nowrap}.sev input{accent-color:var(--muted)}.sev.error{color:var(--error)}.sev.warn{color:var(--warn)}.sev.info{color:var(--info)}
+.linkbtn{font:inherit;font-size:13px;background:none;border:0;color:var(--muted);cursor:pointer;text-decoration:underline}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.chip{font:inherit;font-size:13px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--text);cursor:pointer}
+.chip b{font-weight:600;color:var(--muted);margin-left:2px}.chip::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}.chip.error::before{background:var(--error)}.chip.warn::before{background:var(--warn)}.chip.info::before{background:var(--info)}
+.chip[aria-pressed=true]{background:var(--text);color:var(--bg);border-color:var(--text)}.chip[aria-pressed=true] b{color:var(--bg)}.chip.off{opacity:.4}
+.status{font-size:12.5px;color:var(--muted);margin-top:8px}.fsec-title{font-size:13px;text-transform:uppercase;letter-spacing:.06em;margin:22px 0 4px}
+[hidden]{display:none!important}
 @media (max-width:760px){.tiles{grid-template-columns:1fr 1fr}.naming-grid{grid-template-columns:1fr}}
 </style></head><body><main>
 <header><div class="brand">i18n audit</div><h1>${esc(project)}</h1><div class="meta">${meta} · ${date}</div></header>
 <div class="tiles">
 ${namingScore !== null ? `<div class="card tile score"><div class="label">Key naming score</div><div class="value ${gradeCls(namingScore)}">${namingScore}<span class="grade">/100 · ${grade(namingScore)}</span></div><div class="sub">${scores.length} keys, ${active.filter(f => f.rule === 'naming').length} with weak names</div></div>` : '<div class="card tile"><div class="label">Key naming score</div><div class="value">–</div><div class="sub">No source strings found</div></div>'}
-<div class="card tile error"><div class="label">Errors</div><div class="value">${summary.errors}</div><div class="sub">Will show up as bugs</div></div>
-<div class="card tile warn"><div class="label">Warnings</div><div class="value">${summary.warnings}</div><div class="sub">Make translation harder</div></div>
-<div class="card tile info"><div class="label">Info</div><div class="value">${summary.info}</div><div class="sub">Worth a look</div></div>
+<a class="card tile error" href="#findings" data-only-sev="error"><div class="label">Errors</div><div class="value">${summary.errors}</div><div class="sub">Will show up as bugs</div></a>
+<a class="card tile warn" href="#findings" data-only-sev="warn"><div class="label">Warnings</div><div class="value">${summary.warnings}</div><div class="sub">Make translation harder</div></a>
+<a class="card tile info" href="#findings" data-only-sev="info"><div class="label">Info</div><div class="value">${summary.info}</div><div class="sub">Worth a look</div></a>
 </div>${extra ? `<div class="extra">${esc(extra)}</div>` : ''}
-${naming}${localeTable}${groups || `<p class="clean">✔ No ${baselineInfo ? 'new ' : ''}findings.</p>`}
+${naming}${localeTable}${filterBar || `<p class="clean">✔ No ${baselineInfo ? 'new ' : ''}findings.</p>`}
 <footer>Generated by <a href="https://github.com/Julia-IO/i18n-audit">i18n-audit</a> · <code>npx i18n-audit-cli</code></footer>
-</main></body></html>`);
+</main><script>
+(() => {
+  const q = document.getElementById('q'); if (!q) return;
+  const rules = [...document.querySelectorAll('details.rule')], chips = [...document.querySelectorAll('.chip')];
+  const sevBoxes = [...document.querySelectorAll('.sev input')], status = document.getElementById('status');
+  const total = rules.reduce((n, d) => n + d.querySelectorAll('li').length, 0);
+  let picked = null;
+  function apply() {
+    const term = q.value.trim().toLowerCase(), sevs = new Set(sevBoxes.filter(b => b.checked).map(b => b.dataset.sev));
+    let shown = 0;
+    for (const d of rules) {
+      const ok = sevs.has(d.dataset.sev) && (!picked || picked === d.dataset.rule);
+      let n = 0;
+      for (const li of d.querySelectorAll('li')) { const m = ok && (!term || li.textContent.toLowerCase().includes(term)); li.hidden = !m; if (m) n++; }
+      d.hidden = !n; shown += n;
+      const c = d.querySelector('.count'); c.textContent = n === +c.dataset.total ? n : n + ' of ' + c.dataset.total;
+      if (n && (term || picked)) d.open = true;
+    }
+    for (const s of document.querySelectorAll('.fsec')) s.hidden = !s.querySelector('details.rule:not([hidden])');
+    for (const c of chips) { c.setAttribute('aria-pressed', String(c.dataset.rule === picked)); c.classList.toggle('off', !!picked && c.dataset.rule !== picked); }
+    document.getElementById('nomatch').hidden = shown > 0;
+    status.textContent = shown === total ? 'Showing all ' + total + ' findings' : 'Showing ' + shown + ' of ' + total + ' findings';
+  }
+  q.addEventListener('input', apply);
+  sevBoxes.forEach(b => b.addEventListener('change', apply));
+  chips.forEach(c => c.addEventListener('click', () => { picked = picked === c.dataset.rule ? null : c.dataset.rule; apply(); }));
+  document.getElementById('reset').addEventListener('click', () => { q.value = ''; picked = null; sevBoxes.forEach(b => b.checked = true); apply(); });
+  document.querySelectorAll('[data-only-sev]').forEach(t => t.addEventListener('click', () => {
+    picked = null; sevBoxes.forEach(b => b.checked = b.dataset.sev === t.dataset.onlySev); apply();
+  }));
+  apply();
+})();
+</script></body></html>`);
   return out.join('');
 }
 
