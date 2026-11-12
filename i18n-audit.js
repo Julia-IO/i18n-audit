@@ -31,6 +31,14 @@ const HELP = `Usage: node i18n-audit.js [dir] [options]
   --html [file]           Also write a shareable HTML report (default: i18n-audit-report.html)
   --ci                    Exit with code 1 if any errors are found (only new ones, with --baseline)
 
+For AI coding agents (Claude Code, Cursor, Copilot, Codex…):
+  --agent                 Compact, colour-free fix list grouped by file, with one fix rule per issue type.
+                          Exits with code 1 while errors remain, so an agent can loop until it passes.
+  --changed [ref]         Only report files changed vs a git ref (default: uncommitted and new files;
+                          e.g. --changed main for the whole branch)
+  --rule <ids>            Only report these rules, comma-separated (e.g. manual-plural,missing-plural)
+  --init-agent            Add i18n rules and the check command to AGENTS.md, so agents follow them unprompted
+
 Ignore comments (in code; JSON/ARB files cannot hold comments, so use a baseline for those):
   someCode() // i18n-ignore                       ignore this line
   // i18n-ignore                                  ignore the next line (comment on its own line)
@@ -55,6 +63,10 @@ for (let i = 0; i < argv.length; i++) {
     opt[a === '--baseline' ? 'baseline' : 'writeBaseline'] = file;
   }
   else if (a === '--html') opt.html = argv[i + 1] && /\.html?$/i.test(argv[i + 1]) ? path.resolve(argv[++i]) : path.resolve('i18n-audit-report.html');
+  else if (a === '--agent') opt.agent = true;
+  else if (a === '--init-agent') opt.initAgent = true;
+  else if (a === '--changed') opt.changed = argv[i + 1] && !argv[i + 1].startsWith('-') && !fs.existsSync(argv[i + 1]) ? argv[++i] : 'HEAD';
+  else if (a === '--rule' || a === '--rules') opt.rules = new Set(String(argv[++i] || '').split(',').map(r => r.trim()).filter(Boolean));
   else if (a === '-h' || a === '--help') { console.log(HELP); process.exit(0); }
   else opt.root = a;
 }
@@ -110,6 +122,8 @@ const SECTIONS = [
   ['TRANSLATIONS', ['missing-translation', 'placeholder-mismatch', 'plural-forms', 'untranslated', 'orphan-key']],
 ];
 
+for (const r of opt.rules || []) if (!RULES[r]) { console.error(`Unknown rule "${r}". Rules: ${Object.keys(RULES).join(', ')}`); process.exit(2); }
+
 const findings = [];
 const seen = new Set();
 // Ignore comments, per file: { all: Set|'*' for the whole file, lines: Map<line, Set|'*'> }
@@ -152,6 +166,7 @@ const GENERATED = /\.(g|freezed|gr|config|mocks)\.dart$|app_localizations\w*\.da
 const NON_PRODUCT = /(^|[\\/])(__tests__|__mocks__|tests?|test_\w+|e2e|cypress|playwright|examples?|stories|storybook|docs|dev-docs|benchmarks?|fixtures)[\\/]|\.(test|spec|stories|e2e)\.[jt]sx?$|_test\.dart$/;
 const MARKUP_EXT = new Set(['.js', '.jsx', '.tsx', '.vue', '.svelte']);
 const LOCALE_RE = /^[a-z]{2,3}(?:[-_](?:[A-Za-z]{4}|[A-Za-z]{2}|\d{3}))*$/;
+const ISO639_1 = new Set('aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy da de dv dz ee el en eo es et eu fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu hy hz ia id ie ig ii ik in io is it iu iw ja ji jv jw ka kg ki kj kk kl km kn ko kr ks ku kv kw ky la lb lg li ln lo lt lu lv mg mh mi mk ml mn mo mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg sh si sk sl sm sn so sq sr ss st su sv sw ta te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu'.split(' '));
 const LOCALE_DIR_RE = /(^|[\\/])(locales?|i18n|lang|langs|languages|translations|messages|intl)[\\/]/i;
 const PLURAL_SUFFIX = /[_.](zero|one|two|few|many|other)$/;
 const LETTERS = 'A-Za-z\\u00C0-\\u024F';
@@ -257,11 +272,15 @@ function localeOf(file) {
   if (ext !== '.json') return null;
   const r = path.relative(opt.locales || ROOT, file);
   if (!opt.locales && !LOCALE_DIR_RE.test(r)) return null;
-  for (const cand of [path.basename(file, '.json'), path.basename(path.dirname(file))]) if (LOCALE_RE.test(cand)) return norm(cand);
-  return null;
+  // A file name like ui.json or ai.json fits the locale pattern, so prefer a real ISO 639 language
+  // (src/locales/en-US/ui.json is the "ui" namespace of en-US, not a language called "ui").
+  const cands = [path.basename(file, '.json'), path.basename(path.dirname(file))].filter(c => LOCALE_RE.test(c));
+  const real = cands.find(c => { const p = c.split(/[-_]/)[0].toLowerCase(); return p.length === 3 || ISO639_1.has(p); });
+  return real ? norm(real) : null;
 }
 
-function readStringFile(file, into) {
+const MSG_OBJ_KEYS = new Set(['message', 'defaultMessage', 'description', 'placeholders', 'meaning', 'id']);
+function readStringFile(file, into, nodeKeys = new Set()) {
   let raw;
   try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { console.error(`! Could not parse ${rel(file)}: ${e.message}`); return; }
   const meta = {};
@@ -270,9 +289,12 @@ function readStringFile(file, into) {
     for (const [k, v] of Object.entries(o)) {
       if (k.startsWith('@')) { if (!k.startsWith('@@') && v && typeof v === 'object') meta[(prefix ? prefix + '.' : '') + k.slice(1)] = v; continue; }
       const key = prefix ? `${prefix}.${k}` : k;
+      if (v && typeof v === 'object') nodeKeys.add(key);
       if (v && typeof v === 'object' && !Array.isArray(v)) {
         const msg = typeof v.message === 'string' ? v.message : typeof v.defaultMessage === 'string' ? v.defaultMessage : null;
-        if (msg !== null && ('description' in v || 'placeholders' in v)) into[key] = { value: msg, desc: v.description || null, file };
+        // Chrome/react-intl message object ({message, description}), not a namespace that happens to have keys named message and description
+        const msgObj = msg !== null && ('description' in v || 'placeholders' in v) && Object.keys(v).every(k => MSG_OBJ_KEYS.has(k));
+        if (msgObj) into[key] = { value: msg, desc: typeof v.description === 'string' ? v.description : null, file };
         else rec(v, key);
       } else if (typeof v === 'string') into[key] = { value: v, desc: null, file, flat };
     }
@@ -280,14 +302,14 @@ function readStringFile(file, into) {
   for (const [k, m] of Object.entries(meta)) if (into[k]) { into[k].desc = into[k].desc || m.description || null; into[k].meta = m; }
 }
 
-const locales = {};
+const locales = {}, localeNodes = {};
 let localeFileCount = 0, arbCount = 0;
 for (const f of opt.locales ? walk(opt.locales) : allFiles) {
   const loc = localeOf(f);
   if (!loc) continue;
   localeFileCount++;
   if (path.extname(f) === '.arb') arbCount++;
-  readStringFile(f, (locales[loc] = locales[loc] || {}));
+  readStringFile(f, (locales[loc] = locales[loc] || {}), (localeNodes[loc] = localeNodes[loc] || new Set()));
 }
 // Flutter: l10n.yaml names the template ARB (the source of truth); pubspec tells us the library.
 const detected = [];
@@ -317,6 +339,7 @@ if (!locales[srcLoc]) {
   srcLoc = cands.find(l => l === `${srcLoc}-us`) || cands.sort((a, b) => Object.keys(locales[b]).length - Object.keys(locales[a]).length)[0] || null;
 }
 const SRC = srcLoc ? locales[srcLoc] : {};
+const SRC_NODES = (srcLoc && localeNodes[srcLoc]) || new Set();
 const targets = Object.keys(locales).filter(l => l !== srcLoc).sort();
 
 // A plural group is base_one/base_other (i18next) or base.one/base.other (easy_localization); it needs an "other".
@@ -327,7 +350,7 @@ function pluralBases(keys) {
 }
 const variantBase = (k, bases) => { const m = PLURAL_SUFFIX.exec(k); return m && bases.has(k.slice(0, m.index)) ? k.slice(0, m.index) : null; };
 const pv = (T, base, c) => T[`${base}_${c}`] ?? T[`${base}.${c}`];
-const srcLookup = key => SRC[key] || SRC[key + '_other'] || SRC[key + '.other'] || SRC[key + '_one'] || null;
+const srcLookup = key => SRC[key] || SRC[key + '_other'] || SRC[key + '.other'] || SRC[key + '_one'] || (SRC_NODES.has(key) ? { value: null } : null);
 
 // ---------- 1. scan code ----------
 const usages = [];
@@ -684,6 +707,31 @@ if (opt.baseline) {
   };
 }
 
+// Imperative fix instructions for --agent output and AGENTS.md. Kept short: agents read them every run.
+const AGENT_FIX = {
+  'hardcoded-text': 'Move the text into the source locale file under a descriptive key (feature.element.purpose) and render it with the lookup the project already uses (t(), l10n.key, \'key\'.tr()), in the same namespace as nearby code.',
+  'hardcoded-attr': 'Same as hardcoded text: placeholder, title, alt, aria-label and label values need keys too.',
+  'hardcoded-message': 'Give the toast/alert/error text a key. Put dynamic values in placeholders, not template strings.',
+  'concat': 'Replace the glued pieces with ONE key holding the whole sentence and named placeholders, e.g. t(\'x.summary\', { count, name }). Do not join t() output to other strings. (Log, error and script messages that users never see can get // i18n-ignore concat.)',
+  'manual-plural': 'Delete the count === 1 / (s) logic. Add plural keys (i18next: key_one + key_other; ICU: {count, plural, one {…} other {…}}) and pass { count }.',
+  'missing-plural': 'This string takes a count: split it into plural keys (key_one + key_other, or ICU plural) in the source file and keep passing { count }.',
+  'dynamic-key': 'If an extraction tool or TMS needs to see keys, map each value to a full static key (const LABELS = { open: t(\'status.open\') }). Otherwise leave it.',
+  'no-fallback': 'Add the missing key to the source locale file (or an inline default). Otherwise users see the raw key.',
+  'missing-default': 'Add an inline default text to the t() call.',
+  'default-drift': 'Make the inline default and the source file say the same thing (the source file usually wins).',
+  'naming': 'Leave existing keys unless asked (renaming breaks translations). Name NEW keys feature.element.purpose.',
+  'ambiguous': 'Add a description for translators, or rename the key so it says where the word is used.',
+  'fragment': 'Merge the fragments and the code that glues them into one complete message with placeholders.',
+  'positional-placeholder': 'Rename {0} / %s to a named placeholder ({userName}) in the source and in the call.',
+  'placeholder-undocumented': 'Add a description or example for the placeholder.',
+  'duplicate-source': 'No action needed unless the meanings differ.',
+  'missing-translation': 'Do not machine-translate other locale files unless asked; translators or the TMS fill these.',
+  'placeholder-mismatch': 'Restore the source placeholder names in the translated value. Never translate text inside {}.',
+  'plural-forms': 'Add the missing plural categories for that language, or flag them for translators.',
+  'untranslated': 'Flag for translators; do not invent translations.',
+  'orphan-key': 'Remove the key from that locale file if it no longer exists in the source.',
+};
+
 // Fix hints for a rule, in Flutter syntax when the findings come from .dart/.arb (or easy_localization) files.
 function hintsFor(rule, list) {
   const hint = RULES[rule][2];
@@ -692,6 +740,22 @@ function hintsFor(rule, list) {
   if (!dartHints[rule] || !list.some(isDart)) return [hint];
   return list.every(isDart) ? [dartHints[rule]] : [hint, `Flutter: ${dartHints[rule]}`];
 }
+
+// ---------- scope: --rule and --changed (applied after the baseline, so baseline matching still sees everything) ----------
+const fileOf = f => (/^"/.test(f.where) ? null : f.where.split(/:\d+$| › | \[/)[0]);
+let changedFiles = null;
+if (opt.changed) {
+  const { execFileSync } = require('child_process');
+  const git = args => execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  try {
+    const top = git(['rev-parse', '--show-toplevel']);
+    const base = opt.changed === 'HEAD' ? 'HEAD' : git(['merge-base', opt.changed, 'HEAD']);
+    const names = [...git(['diff', '--name-only', base]).split('\n'), ...git(['ls-files', '--others', '--exclude-standard']).split('\n').map(f => path.relative(top, path.join(ROOT, f)))];
+    changedFiles = new Set(names.filter(Boolean).map(f => path.relative(ROOT, path.join(top, f)).split(path.sep).join('/')));
+  } catch { console.error(`--changed needs a git repository and a valid ref ("${opt.changed}").`); process.exit(2); }
+}
+const inScope = f => (!opt.rules || opt.rules.has(f.rule)) && (!changedFiles || changedFiles.has(fileOf(f)));
+if (opt.rules || changedFiles) findings.splice(0, findings.length, ...findings.filter(inScope));
 
 const active = findings.filter(f => !f.baseline);
 const count = sev => active.filter(f => f.severity === sev).length;
@@ -864,10 +928,80 @@ if (opt.html) {
   console.error(`HTML report written: ${path.relative(process.cwd(), opt.html) || opt.html}`);
 }
 
-if (opt.json) {
+if (opt.initAgent) {
+  // Write the project's i18n rules into AGENTS.md (read by Codex, Cursor, Copilot, Gemini, Claude Code via CLAUDE.md…),
+  // so agents write localizable code from the start instead of being corrected afterwards.
+  const START = '<!-- i18n-audit:start -->', END = '<!-- i18n-audit:end -->';
+  const srcFiles = [...new Set(Object.values(SRC).map(e => rel(e.file)))];
+  const srcWhere = srcFiles.length ? (srcFiles.length <= 3 ? srcFiles.map(f => '`' + f + '`').join(', ') : '`' + path.dirname(srcFiles[0]) + '/`') : 'the source locale file';
+  const flutter = arbCount || detected.some(d => /Flutter|easy_localization/.test(d));
+  const hasBaseline = fs.existsSync(defaultBaseline);
+  const cmd = `npx --yes i18n-audit-cli . --agent --changed${hasBaseline ? ' --baseline' : ''}`;
+  const block = [START,
+    '## Internationalization (i18n)',
+    '',
+    `This project is localized. Source strings live in ${srcWhere}${srcLoc ? ` (source locale: ${srcLoc})` : ''}.`,
+    '',
+    '- Never hardcode user-facing text, including placeholder, title, alt, aria-label, toasts and error messages shown to users. Add a key to the source file and use the existing lookup' + (flutter ? ' (`AppLocalizations.of(context)!.key` / `\'key\'.tr()`).' : ' (`t(\'key\')`, in the namespace nearby code uses).'),
+    '- Name new keys `feature.element.purpose` (e.g. `checkout.payButton.label`)' + (flutter ? ', or `checkoutPayButtonLabel` in ARB files' : '') + '. Never `button1`, `save2` or a key that just repeats the English.',
+    '- One key per complete sentence, with named placeholders (`{count}`, `{userName}`). Never join translated pieces or glue text around a `t()` call.',
+    '- Plurals: never `count === 1 ? \'\' : \'s\'` or "(s)". Use ' + (flutter ? 'ICU plurals in the ARB (`{count, plural, one{…} other{…}}`)' : 'plural keys (`key_one` / `key_other`) or ICU plurals') + ' and pass the count.',
+    '- Only edit the source locale. Do not machine-translate other locale files unless asked; never rename text inside `{}`.',
+    '- Do not rename existing keys unless asked: it breaks existing translations.',
+    '',
+    `Before finishing any change that touches UI text or locale files, run \`${cmd}\` and fix every error it reports (exit code 0 = done). Intentional exceptions get \`// i18n-ignore <rule>\` with a reason.`,
+    END].join('\n');
+  const agentsFile = path.join(ROOT, 'AGENTS.md');
+  let text = fs.existsSync(agentsFile) ? fs.readFileSync(agentsFile, 'utf8') : '';
+  const re = new RegExp(`${START}[\\s\\S]*?${END}`);
+  const verb = !text ? 'Created' : re.test(text) ? 'Updated' : 'Added an i18n section to';
+  text = re.test(text) ? text.replace(re, block) : (text ? text.replace(/\s*$/, '\n\n') : '') + block + '\n';
+  fs.writeFileSync(agentsFile, text);
+  console.log(`${verb} ${rel(agentsFile)}.`);
+  // Claude Code reads CLAUDE.md, not AGENTS.md: import it if there is a CLAUDE.md that does not already.
+  const claudeFile = path.join(ROOT, 'CLAUDE.md');
+  if (fs.existsSync(claudeFile)) {
+    const c = fs.readFileSync(claudeFile, 'utf8');
+    if (!/AGENTS\.md/.test(c)) { fs.writeFileSync(claudeFile, c.replace(/\s*$/, '\n\n') + '@AGENTS.md\n'); console.log(`Added @AGENTS.md to ${rel(claudeFile)} so Claude Code reads it too.`); }
+  } else console.log('Using Claude Code? Add a CLAUDE.md containing the line @AGENTS.md (or rename AGENTS.md to CLAUDE.md).');
+  console.log(`Agents will now run: ${cmd}`);
+} else if (opt.json) {
   console.log(JSON.stringify({ root: ROOT, detected, sourceLocale: srcLoc, targetLocales: targets, codeFiles: codeFiles.length, localeFiles: localeFileCount,
     naming: { score: namingScore, grade: namingScore === null ? null : grade(namingScore), keys: scores.length }, summary,
     baseline: baselineInfo, findings: findings.map(f => ({ ...f, baseline: !!f.baseline })) }, null, 2));
+} else if (opt.agent) {
+  // Plain text, no colour, grouped by file so an agent can open each file once and fix everything in it.
+  const AGENT_LIMIT = 60;
+  const sevRank = { error: 0, warn: 1, info: 2 };
+  const shown = active.filter(f => opt.all || f.severity !== 'info').sort((a, b) => sevRank[a.severity] - sevRank[b.severity]);
+  const srcFiles = [...new Set(Object.values(SRC).map(e => rel(e.file)))];
+  const out = [];
+  out.push(`i18n-audit: ${summary.errors} error(s), ${summary.warnings} warning(s)${opt.all ? `, ${summary.info} info` : ''}` +
+    (changedFiles ? ` in ${changedFiles.size} changed file(s)` : '') + (baselineInfo ? ` (new since baseline; ${baselineInfo.existing} known issues hidden)` : '') + '.');
+  if (!shown.length) { out.push('PASS: nothing to fix.'); }
+  else {
+    out.push(`Source locale: ${srcLoc || 'not found'}${srcFiles.length ? ` (${srcFiles.length <= 3 ? srcFiles.join(', ') : `${path.dirname(srcFiles[0])}/*.json`})` : ''}. Add new keys there only; do not edit other locales unless asked.`);
+    out.push('Fix errors first. If a finding is intentional (dev-only text, logs, brand names), add `// i18n-ignore <rule>` on that line with a short reason.');
+    const page = opt.all ? shown : shown.slice(0, AGENT_LIMIT);
+    const byFile = new Map();
+    for (const f of page) { const k = fileOf(f) || '(project-wide)'; if (!byFile.has(k)) byFile.set(k, []); byFile.get(k).push(f); }
+    const lineNo = f => +((/:(\d+)$/.exec(f.where) || [])[1] || 0);
+    for (const [file, list] of byFile) {
+      out.push('', file);
+      for (const f of list.sort((a, b) => lineNo(a) - lineNo(b))) {
+        const loc = f.where.startsWith(file) ? f.where.slice(file.length).replace(/^:/, 'L').replace(/^ › /, '') : f.where;
+        const where = loc && !String(f.detail).trim().startsWith(loc) ? loc + ' ' : '';
+        out.push(`  ${f.severity === 'error' ? 'E' : f.severity === 'warn' ? 'W' : 'I'} ${where}[${f.rule}] ${String(f.detail).trim()}`);
+      }
+    }
+    const rules = [...new Set(page.map(f => f.rule))];
+    out.push('', 'How to fix:');
+    for (const r of rules) out.push(`  [${r}] ${AGENT_FIX[r] || RULES[r][2]}`);
+    if (page.length < shown.length) out.push('', `${shown.length - page.length} more not shown. Fix these, then re-run; or narrow with --rule <id> / --changed.`);
+    const again = ['npx --yes i18n-audit-cli', opt.root === '.' ? '.' : opt.root, '--agent', baselineInfo ? '--baseline' : '', changedFiles ? `--changed${opt.changed === 'HEAD' ? '' : ' ' + opt.changed}` : '', opt.rules ? `--rule ${[...opt.rules].join(',')}` : ''].filter(Boolean).join(' ');
+    out.push('', `Verify: ${again}  (exit code 0 = no errors left)`);
+  }
+  console.log(out.join('\n'));
 } else {
   const tty = process.stdout.isTTY && !process.env.NO_COLOR;
   const c = (code, s) => tty ? `\x1b[${code}m${s}\x1b[0m` : s;
@@ -910,4 +1044,4 @@ if (opt.json) {
   const extra = [suppressed ? `${suppressed} ignored by i18n-ignore comments` : '', baselineInfo ? `${baselineInfo.existing} in baseline` : ''].filter(Boolean).join(', ');
   console.log(`\n${red(`${summary.errors} errors`)}, ${yellow(`${summary.warnings} warnings`)}, ${blue(`${summary.info} info`)}${baselineInfo ? ' (new)' : ''}${extra ? dim(`  ·  ${extra}`) : ''}\n`);
 }
-process.exitCode = opt.ci && summary.errors ? 1 : 0; // not process.exit(): that truncates large output piped to another program
+process.exitCode = !opt.initAgent && (opt.ci || opt.agent) && summary.errors ? 1 : 0; // not process.exit(): that truncates large output piped to another program

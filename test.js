@@ -57,6 +57,42 @@ run(path.join(__dirname, 'examples', 'flutter'), '--html', htmlFile);
 const html = fs.existsSync(htmlFile) ? fs.readFileSync(htmlFile, 'utf8') : '';
 expect('html: report written with naming score and findings', html.includes('Key naming score') && html.includes('Hand-rolled plural') && html.includes('save2'));
 expect('html: absolute project path not included', html && !html.includes(path.join(__dirname, 'examples')));
+// Agent mode: plain fix list grouped by file, exit code 1 while errors remain.
+const agentRun = (dir, ...args) => { try { execFileSync(process.execPath, [CLI, dir, '--agent', ...args], { encoding: 'utf8' }); return { code: 0 }; } catch (e) { return { code: e.status, out: e.stdout }; } };
+const ag = agentRun(path.join(__dirname, 'examples', 'react'));
+expect('agent: exits 1 with errors and lists file, line and rule', ag.code === 1 && /src\/Checkout\.jsx\n  E L\d+ \[/.test(ag.out) && ag.out.includes('How to fix:') && !ag.out.includes('\x1b['));
+const agRule = agentRun(path.join(__dirname, 'examples', 'react'), '--rule', 'manual-plural');
+expect('agent: --rule keeps only that rule', agRule.out.includes('[manual-plural]') && !agRule.out.includes('[hardcoded-text]'));
+
+// Namespace-per-file layout: src/locales/en-US/ui.json is a namespace, not a language called "ui";
+// arrays (returnObjects) and groups with keys named message/description are ordinary keys.
+const ns = path.join(tmp, 'ns');
+fs.mkdirSync(path.join(ns, 'src', 'locales', 'en-US'), { recursive: true });
+fs.writeFileSync(path.join(ns, 'src', 'locales', 'en-US', 'ui.json'), JSON.stringify({ dialog: { close: 'Close dialog' } }));
+fs.writeFileSync(path.join(ns, 'src', 'locales', 'en-US', 'landing.json'), JSON.stringify({ points: ['One', 'Two'], quote: { message: 'Message', description: 'Describe the project', cancel: 'Cancel quote' } }));
+fs.writeFileSync(path.join(ns, 'src', 'App.jsx'), "export const A = () => <div>{t('dialog.close')}{t('points', { returnObjects: true })}{t('quote.cancel')}</div>;\n");
+const nsr = JSON.parse(run(ns, '--json'));
+expect('namespaces: ui.json is not a target language', nsr.sourceLocale === 'en-us' && nsr.targetLocales.length === 0);
+expect('namespaces: keys in namespace files, arrays and message/description groups are found', !nsr.findings.some(f => f.rule === 'no-fallback'));
+
+// --changed and --init-agent in a throwaway git repo.
+const repo = path.join(tmp, 'repo');
+fs.cpSync(path.join(__dirname, 'examples', 'react'), repo, { recursive: true });
+const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', ...a], { stdio: 'ignore' });
+let gitOk = true;
+try { git('init', '-q'); git('add', '-A'); git('commit', '-qm', 'init'); } catch { gitOk = false; }
+if (gitOk) {
+  expect('changed: nothing reported when no files changed', agentRun(repo, '--changed').code === 0);
+  fs.writeFileSync(path.join(repo, 'src', 'New.jsx'), 'export const N = ({ count }) => <p>{count === 1 ? "file" : "files"}</p>;\n');
+  const ch = agentRun(repo, '--changed');
+  expect('changed: only the new file is reported', ch.code === 1 && ch.out.includes('src/New.jsx') && !ch.out.includes('Checkout.jsx'));
+  fs.writeFileSync(path.join(repo, 'CLAUDE.md'), '# Notes\n');
+  run(repo, '--init-agent'); run(repo, '--init-agent');
+  const agents = fs.readFileSync(path.join(repo, 'AGENTS.md'), 'utf8');
+  expect('init-agent: AGENTS.md written once (idempotent) with the check command', agents.split('i18n-audit:start').length === 2 && agents.includes('--agent --changed'));
+  expect('init-agent: CLAUDE.md imports AGENTS.md', fs.readFileSync(path.join(repo, 'CLAUDE.md'), 'utf8').includes('@AGENTS.md'));
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log(failed ? `\n${failed} check(s) failed` : '\nAll checks passed');

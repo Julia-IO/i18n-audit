@@ -1,12 +1,12 @@
 {
   "name": "i18n-audit-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Zero-dependency i18n linter: finds hardcoded strings, concatenated sentences and missing plurals, scores your key names, and checks translations. Supports React/Vue/Svelte and Flutter.",
   "bin": { "i18n-audit": "i18n-audit.js" },
   "files": ["i18n-audit.js"],
   "scripts": { "test": "node test.js" },
   "engines": { "node": ">=16" },
-  "keywords": ["i18n", "l10n", "localization", "internationalization", "lint", "flutter", "arb", "i18next", "react-intl", "vue-i18n", "plurals", "icu"],
+  "keywords": ["i18n", "l10n", "localization", "internationalization", "lint", "flutter", "arb", "i18next", "react-intl", "vue-i18n", "plurals", "icu", "ai-agents", "agents-md", "claude-code", "cursor"],
   "author": "Julia Díez",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/Julia-IO/i18n-audit.git" }

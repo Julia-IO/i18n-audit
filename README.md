@@ -103,6 +103,11 @@ node i18n-audit.js [dir] [options]
   --json                   Machine-readable output
   --html [file]            Also write a shareable HTML report (default: i18n-audit-report.html)
   --ci                     Exit with code 1 if there are errors
+
+  --agent                  Compact fix list for AI coding agents (exits 1 while errors remain)
+  --changed [ref]          Only files changed vs a git ref (default: uncommitted and new files)
+  --rule <ids>             Only these rules, comma-separated (e.g. manual-plural,missing-plural)
+  --init-agent             Write i18n rules and the check command into AGENTS.md
 ```
 
 ## HTML report
@@ -112,6 +117,34 @@ npx i18n-audit-cli . --html
 ```
 
 Writes `i18n-audit-report.html`: a single self-contained file with the key naming score, a breakdown of keys by grade, the weakest keys and why, a per-language translation table, and every finding with its fix hint. It follows the reader's light/dark setting, shows only the project folder name (never your full disk path), and can be attached to a PR, uploaded as a CI artifact or shared as-is.
+
+## Use it with AI coding agents
+
+AI coding agents write a lot of UI code, and by default they hardcode English, glue sentences together and pluralise with `count === 1 ? '' : 's'`. Two commands fix that.
+
+**1. Tell every agent the rules, once:**
+
+```
+npx i18n-audit-cli . --init-agent
+```
+
+This adds an i18n section to `AGENTS.md` (read by Codex, Cursor, Copilot, Gemini CLI and others): where the source strings live, how to name keys, how to do plurals, not to machine-translate other locales, and to run the check below before finishing. If the project has a `CLAUDE.md`, it gets an `@AGENTS.md` import so Claude Code reads it too. Re-running it updates the section in place.
+
+**2. The agent checks its own work:**
+
+```
+npx i18n-audit-cli . --agent --changed
+```
+
+`--agent` prints a short, colour-free list grouped by file (`E L52 [manual-plural] …`), followed by one concrete fix instruction per issue type, and exits with code 1 while errors remain, so the agent can fix, re-run and stop when it passes. `--changed` limits the report to files the agent touched (uncommitted and new files; `--changed main` for a whole branch), so it never wanders off into the rest of the codebase.
+
+To hand an agent a cleanup job on legacy code, narrow it to one issue type:
+
+```
+npx i18n-audit-cli . --agent --rule manual-plural,missing-plural
+```
+
+Combine with `--baseline` to show only issues that are new since the baseline.
 
 ## Adopting it on an existing codebase
 
