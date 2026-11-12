@@ -11,7 +11,7 @@ A zero-dependency linter for internationalization hygiene. Point it at a codebas
 It works with **React, Vue and Svelte** (i18next, react-intl/FormatJS, vue-i18n) and **Flutter** (gen_l10n ARB files and easy_localization).
 
 ```
-npx github:Julia-IO/i18n-audit path/to/your/project
+npx i18n-audit-cli path/to/your/project
 ```
 
 You only need Node 16 or newer. There's nothing to install and nothing to configure.
@@ -109,8 +109,8 @@ node i18n-audit.js [dir] [options]
 Most real projects have hundreds of existing issues. To block new ones without fixing everything first:
 
 ```
-npx github:Julia-IO/i18n-audit . --write-baseline     # once; commit i18n-baseline.json
-npx github:Julia-IO/i18n-audit . --baseline --ci      # in CI: fails only on NEW issues
+npx i18n-audit-cli . --write-baseline     # once; commit i18n-baseline.json
+npx i18n-audit-cli . --baseline --ci      # in CI: fails only on NEW issues
 ```
 
 Findings are matched by content, not line number, so editing a file doesn't make its old issues look new. The report also counts issues fixed since the baseline, so you can see the backlog shrink. Run without `--baseline` at any time to get the full picture.
@@ -120,7 +120,7 @@ Findings are matched by content, not line number, so editing a file doesn't make
 ```yaml
 - uses: actions/setup-node@v4
   with: { node-version: 20 }
-- run: npx --yes github:Julia-IO/i18n-audit . --baseline --ci
+- run: npx --yes i18n-audit-cli . --baseline --ci
 ```
 
 ## Ignoring a line
